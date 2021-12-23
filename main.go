@@ -59,7 +59,7 @@ func main() {
 	}
 	app := fiber.New(fiber.Config{
 		AppName:     "Darkhub Key System V" + version,
-		ProxyHeader: "x-forwarded-for",
+		ProxyHeader: "CF-Connecting-IP",
 	})
 	// </editor-fold>
 
@@ -190,13 +190,14 @@ func main() {
 		if err := c.BodyParser(k); err != nil {
 			return c.Status(500).SendString("Internal Server Error - Error Code: QK0wMhbskyUJ0888labt")
 		}
+		fmt.Println(c.IP())
 		if !checkKey(k.Key, hashIP(c.IP())) {
 			return c.SendString("false")
 		}
 		return c.SendString("OK")
 	})
 	// </editor-fold>
-	err = app.Listen(":5000")
+	err = app.Listen(":5001")
 	if err != nil {
 		log.Panicln(err)
 	}
@@ -311,11 +312,16 @@ func checkKey(key string, ip string) bool {
 	if err != nil {
 		return false
 	}
-	//hashed := t[2]
+	hashed := t[2]
 	ct, err := strconv.Atoi(t[3])
 	if err != nil {
 		return false
 	}
+	fmt.Println("HASH: " + hashed)
+	fmt.Println("CP1: " + cp1.IP)
+	fmt.Println("CP2: " + cp2.IP)
+	fmt.Println("REQ: " + ip)
+
 	/*if cp1.IP != ip || cp2.IP != ip || hashed != ip {
 		return false
 	}*/
