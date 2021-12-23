@@ -36,12 +36,17 @@ type (
 	checkKeyData struct {
 		Key string `json:"key"`
 	}
+	KeyStub struct {
+		IP string    `json:"ip"`
+		T  time.Time `json:"t"`
+	}
 )
 
 var (
-	ks       *keyset.Handle
-	ksPub    *keyset.Handle
-	encLabel = []byte("DARKHUBOPLOL")
+	ks             *keyset.Handle
+	ksPub          *keyset.Handle
+	encLabel       = []byte("DARKHUBOPLOL")
+	activeKeyStubs []string
 )
 
 //nolint:funlen
@@ -156,7 +161,7 @@ func main() {
 			c.Set("refresh", "5; url=/checkpoint/1")
 			return c.Status(400).SendString("Bad request - Error Code: QHyxIIrMXmwWAAJ2Ikyo")
 		}
-		key, err := genKey(*cp1, *cp2, hash, false)
+		key, err := genKey(*cp1, *cp2, hash, false, false)
 		if err != nil {
 			c.Set("refresh", "5;")
 			return c.Status(500).SendString("Failed to generate key")
@@ -174,13 +179,41 @@ func main() {
 	app.Get("/staff/O7KClOdBx0BeyM6E6TeD", func(c *fiber.Ctx) error {
 		staffCookie := c.Cookies(staffCookieName)
 		if staffCookie != "true" {
-			return c.SendStatus(404)
+			return c.Status(404).SendString("Cannot GET /staff/O7KClOdBx0BeyM6E6TeD")
 		}
-		key, err := genKey(checkpoint{}, checkpoint{}, hashIP(c.IP()), true)
+		key, err := genKey(checkpoint{}, checkpoint{}, hashIP(c.IP()), true, false)
 		if err != nil {
 			c.Set("refresh", "5;")
 			return c.Status(500).SendString("Failed to generate key")
 		}
+		return c.SendString(*key)
+	})
+	app.Get("/staff/3SGRFs9TEBIfShMcqQJ7", func(c *fiber.Ctx) error {
+		// Generate donator key Stubs
+		// get Ip hash
+		hash := hashIP(c.IP())
+		if cook := c.Cookies(staffCookieName); cook != "true" {
+			return c.Status(404).SendString("Cannot GET /staff/3SGRFs9TEBIfShMcqQJ7")
+		}
+		stub, err := genKeyStub(hash)
+		if err != nil {
+			return err
+		}
+		activeKeyStubs = append(activeKeyStubs, stub)
+		return c.SendString(stub)
+	})
+	app.Get("/donator/redeemKey", func(c *fiber.Ctx) error {
+		ip := hashIP(c.IP())
+		keyS := c.Query("key")
+		if !contains(activeKeyStubs, keyS) {
+			return c.Status(404).SendString("Invalid Key")
+		}
+		key, err := genKey(checkpoint{IP: ip, Checkpoint: "1", Time: "0"}, checkpoint{IP: ip, Checkpoint: "2", Time: "0"}, ip, false, true)
+		if err != nil {
+			return c.Status(500).SendString("Failed to generate key Key")
+		}
+		activeKeyStubs = remove(activeKeyStubs, keyS)
+		fmt.Println(activeKeyStubs)
 		return c.SendString(*key)
 	})
 	// </editor-fold>
@@ -221,7 +254,7 @@ func encrypt(data string) (*string, error) {
 	if err != nil {
 		return nil, err
 	}
-	rt := base64.StdEncoding.EncodeToString(ct)
+	rt := base64.URLEncoding.EncodeToString(ct)
 	return &rt, nil
 }
 func decrypt(data string) (*string, error) {
@@ -229,7 +262,7 @@ func decrypt(data string) (*string, error) {
 	if err != nil {
 		return nil, err
 	}
-	ct, err := base64.StdEncoding.DecodeString(data)
+	ct, err := base64.URLEncoding.DecodeString(data)
 	if err != nil {
 		return nil, err
 	}
@@ -274,7 +307,7 @@ func decodeCheckpoint(data string) (*checkpoint, error) {
 
 // </editor-fold>
 // <editor-fold desc="Key Methods">
-func genKey(c1 checkpoint, c2 checkpoint, ip string, staff bool) (*string, error) {
+func genKey(c1 checkpoint, c2 checkpoint, ip string, staff bool, donator bool) (*string, error) {
 	cp1, err := json.Marshal(c1)
 	if err != nil {
 		return nil, err
@@ -283,7 +316,7 @@ func genKey(c1 checkpoint, c2 checkpoint, ip string, staff bool) (*string, error
 	if err != nil {
 		return nil, err
 	}
-	encstring := fmt.Sprintf("%s %s %s %s %s", cp1, cp2, ip, fmt.Sprint(time.Now().Unix()), strconv.FormatBool(staff))
+	encstring := fmt.Sprintf("%s %s %s %s %s %s", cp1, cp2, ip, fmt.Sprint(time.Now().Unix()), strconv.FormatBool(staff), strconv.FormatBool(donator))
 	enc, err := encrypt(encstring)
 	if err != nil {
 		return nil, err
@@ -296,7 +329,7 @@ func checkKey(key string, ip string) bool {
 		return false
 	}
 	t := strings.Split(*dec, " ")
-	if len(t) != 5 {
+	if len(t) != 6 {
 		return false
 	}
 	if t[4] == "true" {
@@ -316,16 +349,53 @@ func checkKey(key string, ip string) bool {
 	if err != nil {
 		return false
 	}
-	fmt.Println("HASH: " + hashed)
-	fmt.Println("CP1: " + cp1.IP)
-	fmt.Println("CP2: " + cp2.IP)
-	fmt.Println("REQ: " + ip)
 
-	/*if cp1.IP != ip || cp2.IP != ip || hashed != ip {
+	if cp1.IP != ip || cp2.IP != ip || hashed != ip {
 		return false
-	}*/
+	}
+	if t[5] == "true" {
+		return true
+	}
 	cookieTime := time.Unix(int64(ct), 0)
 	return cookieTime.Unix() < time.Now().Add(time.Hour*24).Unix()
 }
 
-// </editor-fold
+// <editor-fold desc="donator key">
+func genKeyStub(ip string) (string, error) {
+	keyS := KeyStub{
+		IP: ip,
+		T:  time.Now(),
+	}
+	d, err := json.Marshal(keyS)
+	if err != nil {
+		return "", err
+	}
+	enc, err := encrypt(string(d))
+	if err != nil {
+		return "", err
+	}
+	return *enc, nil
+}
+
+// </editor-fold>
+// </editor-fold>
+// <editor-fold desc="slice methods">
+func remove(s []string, substring string) []string {
+	for i, v := range s {
+		if v == substring {
+			s = append(s[:i], s[i+1:]...)
+			break
+		}
+	}
+	return s
+}
+func contains(s []string, substring string) bool {
+	for _, v := range s {
+		if v == substring {
+			return true
+		}
+	}
+	return false
+}
+
+// </editor-fold>
