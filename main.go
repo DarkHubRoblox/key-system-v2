@@ -190,7 +190,6 @@ func main() {
 		if err := c.BodyParser(k); err != nil {
 			return c.Status(500).SendString("Internal Server Error - Error Code: QK0wMhbskyUJ0888labt")
 		}
-		fmt.Println(c.IP())
 		if !checkKey(k.Key, hashIP(c.IP())) {
 			return c.SendString("false")
 		}
