@@ -213,7 +213,6 @@ func main() {
 			return c.Status(500).SendString("Failed to generate key Key")
 		}
 		activeKeyStubs = remove(activeKeyStubs, keyS)
-		fmt.Println(activeKeyStubs)
 		return c.SendString(*key)
 	})
 	// </editor-fold>
