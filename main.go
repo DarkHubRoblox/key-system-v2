@@ -1,325 +1,208 @@
 package main
 
 import (
-	"crypto/rand"
-	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/etag"
 	"github.com/gofiber/fiber/v2/middleware/monitor"
+	"github.com/google/tink/go/hybrid"
+	"github.com/google/tink/go/keyset"
 	"log"
 	"strconv"
 	"strings"
 	"time"
 )
 
-var (
-	ipCheck1   []string
-	ipCheck2   []string
-	privateKey *rsa.PrivateKey
-	publicKey  rsa.PublicKey
+const (
+	checkpoint1CookieName = "COOKIE1"
+	checkpoint2CookieName = "9GDPz917jNBZq00Dv9T5p8pcg"
+	checkpoint1URL        = "https://linkvertise.com/224166/darkhub-key"
+	checkpoint2URL        = "https://linkvertise.com/224166/darkhub-checkpoint"
+	finishCookieName      = "usedfhytgrbuoeyrbftvuyoisrbnfovuysrbotguynsbrfuoivbhdfruyignbdouirthgbuifsdhngbkudryhngkbudfhgihujadamlogshwid"
+	version               = "2.0.0"
+	staffCookieName       = "eXE6QrxMIrzT5ribgfvV1231qwesa"
 )
 
 type (
-	Key struct {
-		ip          string
-		time        string
-		checkPoints struct {
-			checkPoint1 string
-			checkPoint2 string
-		}
+	checkpoint struct {
+		Time       string `json:"time"`
+		Checkpoint string `json:"checkpoint"`
+		IP         string `json:"ip"`
 	}
-	Visited struct {
-		point string
-		time  string
-		ip    string
-	}
-	checkBody struct {
+	checkKeyData struct {
 		Key string `json:"key"`
 	}
+)
+
+var (
+	ks       *keyset.Handle
+	ksPub    *keyset.Handle
+	encLabel = []byte("DARKHUBOPLOL")
 )
 
 //nolint:funlen
 //nolint:gocognit
 func main() {
-	privKey, err := rsa.GenerateKey(rand.Reader, 4096)
+	// <editor-fold desc="Initialization">
+	k, err := keyset.NewHandle(hybrid.ECIESHKDFAES128CTRHMACSHA256KeyTemplate())
 	if err != nil {
-		log.Fatalln(err)
+		panic(err)
 	}
-	privateKey = privKey
-	publicKey = privateKey.PublicKey
-
-	// <editor-fold desc="Fiber Part">
+	ks = k
+	ksPub, err = ks.Public()
+	if err != nil {
+		panic(err)
+	}
 	app := fiber.New(fiber.Config{
-		Prefork: true,
+		AppName:     "Darkhub Key System V" + version,
+		ProxyHeader: "x-forwarded-for",
 	})
-	// <editor-fold desc="Middleware">
-	app.Use(etag.New(etag.Config{
-		Weak: false,
-	}))
-	app.Get("/eb2uktai0twzDoNwHU7ynFqQGLL9NabJMhGTb3HDVoK3Sih32Q", monitor.New(monitor.ConfigDefault))
 	// </editor-fold>
-	// <editor-fold desc="Simple redirection">
+
+	// <editor-fold desc="Middleware">
+	app.Static("/", "./assets")
+	app.Get("/8mczIB7GXSs6ASWrAXoQfOMeg5OcEj", monitor.New(monitor.ConfigDefault))
+	// etag
+	app.Use(etag.New(etag.ConfigDefault))
+	// </editor-fold>
+	// <editor-fold desc="Routes">
 	app.Get("/", func(c *fiber.Ctx) error {
-		// check if they've already done it
-		hash := hashIP(c.IP())
-		// check if key is vaild
-		cookie, _ := checkKey(c.Cookies("FUNNYKEY"), hash)
-		if !cookie {
-			// clear old key
-			c.ClearCookie("FUNNYKEY")
-			// if not, generate a new key
-			return c.Redirect("https://link-center.net/224166/darkhub-key")
+		if cookie := c.Cookies(finishCookieName); len(cookie) > 0 {
+			if checkKey(cookie, hashIP(c.IP())) {
+				return c.Redirect("/getKey")
+			}
+			c.ClearCookie(finishCookieName)
 		}
+		return c.Redirect(checkpoint1URL)
+	})
+	cps := app.Group("/checkpoint")
+	// <editor-fold desc="Checkpoint 1">
+	cps.Get("/1", func(c *fiber.Ctx) error {
+		hash := hashIP(c.IP())
+		str, err := generateCheckpoint(hash, "1")
+		if err != nil {
+			c.Set("refresh", "5; url=/")
+			return c.Status(500).SendString("Failed to generate checkpoint data - Error Code: zhKIhTbv10GwTD91cAwM")
+		}
+		cookie := fiber.Cookie{
+			Name:    checkpoint1CookieName,
+			Value:   *str,
+			Expires: time.Now().Add(time.Minute * 5),
+		}
+		c.Cookie(&cookie)
+		return c.Redirect(checkpoint2URL)
+	})
+	// </editor-fold>
+	// <editor-fold desc="Checkpoint 2">
+	cps.Get("/2", func(c *fiber.Ctx) error {
+		hash := hashIP(c.IP())
+		checkpoint1 := c.Cookies(checkpoint1CookieName)
+		cp1, err := decodeCheckpoint(checkpoint1)
+		c.Set("refresh", "5; url=/checkpoint/1")
+		if err != nil {
+			return c.Status(500).SendString("Failed to decode checkpoint data - Error Code: DrNWaI38m2esAgRElGov")
+		}
+		if cp1.IP != hash {
+			return c.Status(400).SendString("Bad request - Error Code: 9czyNcOmjLFAcZpy8N7T")
+		}
+		cp1t, err := strconv.Atoi(cp1.Time)
+		if err != nil {
+			return c.Status(400).SendString("Bad request - Error Code: MSNCOTUfPsBGmQzq1MA1")
+		}
+		if int64(cp1t)-time.Now().Unix() > int64(time.Minute*5) {
+			return c.Status(400).SendString("Bad request - Error Code: BKno9mx7E0W7BlVvjDGg")
+		}
+		str, err := generateCheckpoint(hash, "2")
+		if err != nil {
+			return c.Status(500).SendString("Failed to generate checkpoint data - Error Code: Sn5sZyVtn8nTBIJYmGRy")
+		}
+		cookie := fiber.Cookie{
+			Name:    checkpoint2CookieName,
+			Value:   *str,
+			Expires: time.Now().Add(time.Minute * 5),
+		}
+		c.Cookie(&cookie)
+		c.Set("refresh", "")
 		return c.Redirect("/getKey")
 	})
 	// </editor-fold>
-
-	// <editor-fold desc="checkpoints">
-	app.Get("/checkpoint/1", func(ctx *fiber.Ctx) error {
-		// hash for ip
-		hash := hashIP(ctx.IP())
-		// make visited cookie
-		v := Visited{
-			point: "1",
-			time:  strconv.FormatInt(time.Now().Unix(), 10),
-			ip:    hash,
+	// </editor-fold>
+	// <editor-fold desc="Get Key">
+	app.Get("/getkey", func(c *fiber.Ctx) error {
+		hash := hashIP(c.IP())
+		if cook := c.Cookies(finishCookieName); len(cook) > 0 {
+			if checkKey(cook, hash) {
+				return c.SendString(cook)
+			}
+			c.ClearCookie(finishCookieName)
 		}
-		// enc it
-		enc, worked := RsaOaepEncrypt(fmt.Sprintf("%s:%s:%s", v.point, v.time, v.ip))
-		if !worked {
-			return ctx.Status(500).SendString("Internal Server Error")
+		checkpoint1 := c.Cookies(checkpoint1CookieName)
+		checkpoint2 := c.Cookies(checkpoint1CookieName)
+		cp1, err := decodeCheckpoint(checkpoint1)
+		if err != nil {
+			c.Set("refresh", "5; url=/checkpoint/1")
+			return c.Status(400).SendString("Bad request - Error Code: W77ggxuPYvVejYKCsZrh")
 		}
-		// add ip to ipcheck1
-		ipCheck1 = append(ipCheck1, hash)
-		// set cookie for user
-		ctx.Cookie(&fiber.Cookie{
-			Name:     "CHECKPOINT1",
-			Value:    enc,
-			Path:     "/",
-			Expires:  time.Now().Add(time.Minute * 5),
-			Secure:   true,
-			HTTPOnly: true,
-			SameSite: "strict",
-		})
-		// then send to the linkvertise
-		return ctx.Redirect("https://linkvertise.com/224166/darkhub-checkpoint")
+		cp2, err := decodeCheckpoint(checkpoint2)
+		if err != nil {
+			c.Set("refresh", "5; url=/checkpoint/2")
+			return c.Status(400).SendString("Bad request - Error Code: voDCq8G4R51xM3eGWwpS")
+		}
+		if cp1.IP != hash || cp2.IP != hash {
+			c.Set("refresh", "5; url=/checkpoint/1")
+			return c.Status(400).SendString("Bad request - Error Code: QHyxIIrMXmwWAAJ2Ikyo")
+		}
+		key, err := genKey(*cp1, *cp2, hash, false)
+		if err != nil {
+			c.Set("refresh", "5;")
+			return c.Status(500).SendString("Failed to generate key")
+		}
+		cookie := fiber.Cookie{
+			Name:    finishCookieName,
+			Value:   *key,
+			Expires: time.Now().Add(time.Hour * 24),
+		}
+		c.Cookie(&cookie)
+		c.ClearCookie(checkpoint1CookieName)
+		c.ClearCookie(checkpoint2CookieName)
+		return c.SendString(*key)
 	})
-
-	app.Get("/checkpoint/2", func(ctx *fiber.Ctx) error {
-		// hash for ip
-		hash := hashIP(ctx.IP())
-		// check if the user visited 1
-		if contains(ipCheck1, hash) {
-			// check cookie
-			c1 := ctx.Cookies("CHECKPOINT1")
-			// if cookie is empty
-			if len(c1) == 0 {
-				ctx.Set("refresh", "5; url=/1")
-				return ctx.Status(400).SendString("Did you do checkpoint 1?")
-			}
-			// make cookie for checkpoint 2
-			v := Visited{
-				point: "2",
-				time:  strconv.FormatInt(time.Now().Unix(), 10),
-				ip:    hash,
-			}
-			// enc it
-			enc, worked := RsaOaepEncrypt(fmt.Sprintf("%s:%s:%s", v.point, v.time, v.ip))
-			if !worked {
-				return ctx.Status(500).SendString("Internal Server Error")
-			}
-			// remove from 1
-			ipCheck1 = remove(ipCheck1, hash)
-			// add to 2
-			ipCheck2 = append(ipCheck2, hash)
-			// set cookie for checkpoint 2
-			ctx.Cookie(&fiber.Cookie{
-				Name:     "CHECKPOINT2",
-				Value:    enc,
-				Path:     "/",
-				Expires:  time.Now().Add(time.Minute * 5),
-				Secure:   true,
-				HTTPOnly: true,
-				SameSite: "strict",
-			})
-			// then send to the keyPage
-			return ctx.Redirect("../getKey")
+	app.Get("/staff/O7KClOdBx0BeyM6E6TeD", func(c *fiber.Ctx) error {
+		staffCookie := c.Cookies(staffCookieName)
+		if staffCookie != "true" {
+			return c.SendStatus(404)
 		}
-		// if user didn't visit 1
-		return ctx.Redirect("./1")
+		key, err := genKey(checkpoint{}, checkpoint{}, hashIP(c.IP()), true)
+		if err != nil {
+			c.Set("refresh", "5;")
+			return c.Status(500).SendString("Failed to generate key")
+		}
+		return c.SendString(*key)
 	})
 	// </editor-fold>
-	app.Get("/getKey", func(ctx *fiber.Ctx) error {
-		// get ip hashed
-		hash := hashIP(ctx.IP())
-		// check if the user already has a vaild key
-		key := ctx.Cookies("FUNNYKEY")
-		if key != "" {
-			// check the key
-			v, _ := checkKey(key, hash)
-			if v {
-				// send key
-				return ctx.SendString(key)
-			}
-			// if it isn't clear it
-			ctx.ClearCookie("FUNNYKEY")
-			ctx.ClearCookie("CHECKPOINT1")
-			ctx.ClearCookie("CHECKPOINT2")
-			ctx.Set("refresh", "2; url=/")
-			return ctx.SendString("Saved key is invalid.")
+	// <editor-fold desc="check Key">
+	app.Post("/checkkey", func(c *fiber.Ctx) error {
+		k := new(checkKeyData)
+		if err := c.BodyParser(k); err != nil {
+			return c.Status(500).SendString("Internal Server Error - Error Code: QK0wMhbskyUJ0888labt")
 		}
-		// check the user has been to both checkpoints
-		c1 := ctx.Cookies("CHECKPOINT1")
-		c2 := ctx.Cookies("CHECKPOINT2")
-		// check if ipcheck2 has ip
-		if contains(ipCheck2, hash) {
-			if len(c1) == 0 || len(c2) == 0 {
-				ctx.Set("refresh", "5; url=../")
-				return ctx.Status(400).SendString("Failed to get key")
-			}
-			cp1, worked := RsaOaepDecrypt(c1)
-			if !worked {
-				ctx.Set("refresh", "5;")
-				return ctx.Status(400).SendString("Failed to get key")
-			}
-			cp2, worked := RsaOaepDecrypt(c2)
-			if !worked {
-				ctx.Set("refresh", "5;")
-				return ctx.Status(400).SendString("Failed to get key")
-			}
-			// parse cookies
-			cp1Parsed := strings.Split(cp1, ":")
-			cp2Parsed := strings.Split(cp2, ":")
-			if len(cp1Parsed) < 3 || len(cp2Parsed) < 3 {
-				ctx.ClearCookie("CHECKPOINT1")
-				ctx.ClearCookie("CHECKPOINT2")
-				ctx.Set("refresh", "5; url=/")
-				return ctx.SendString("Previous key invalid")
-			}
-			// define checkpoints for cookie
-
-			cps := struct {
-				checkPoint1 string
-				checkPoint2 string
-			}{checkPoint1: cp1, checkPoint2: cp2}
-			k := getKey(Key{ip: hash, time: strconv.Itoa(int(time.Unix(time.Now().Unix(), 0).Unix())), checkPoints: cps})
-			ctx.Cookie(&fiber.Cookie{
-				Name:     "FUNNYKEY",
-				Value:    k,
-				Path:     "/",
-				Expires:  time.Now().Add(time.Hour * 24),
-				Secure:   true,
-				HTTPOnly: true,
-				SameSite: "strict",
-			})
-			// remove ip
-			ipCheck2 = remove(ipCheck2, hash)
-			return ctx.SendString(k)
+		if !checkKey(k.Key, hashIP(c.IP())) {
+			return c.SendString("false")
 		}
-		ctx.ClearCookie("CHECKPOINT1")
-		ctx.ClearCookie("CHECKPOINT2")
-		ctx.Set("refresh", "5; url=/")
-		return ctx.SendString("Failed to get key")
+		return c.SendString("OK")
 	})
-	app.Post("/checkKey", func(ctx *fiber.Ctx) error {
-		if len(ctx.Body()) == 0 {
-			return ctx.Send([]byte("no key"))
-		}
-		var e checkBody
-		err := ctx.BodyParser(&e)
-		if err != nil {
-			return err
-		}
-		worked, text := checkKey(e.Key, hashIP(ctx.IP()))
-		if !worked {
-			return ctx.Status(403).Send([]byte(text))
-		}
-		ctx.Set("x-Worked-and-saved", "true")
-		return ctx.Status(202).SendString(e.Key)
-	})
+	// </editor-fold>
 	err = app.Listen(":5000")
 	if err != nil {
-		return
-	}
-	// </editor-fold>
-}
-
-func contains(s []string, e string) bool {
-	for _, a := range s {
-		if a == e {
-			return true
-		}
-	}
-	return false
-}
-
-func getKey(k Key) string {
-	str := fmt.Sprintf("%s %s %s %s", k.ip, k.time, k.checkPoints.checkPoint1, k.checkPoints.checkPoint2)
-	enc, worked := RsaOaepEncrypt(str)
-	if !worked {
-		return "Failed to make key"
-	}
-	return enc
-}
-
-func checkKey(key string, iphash string) (bool, string) {
-	k, worked := RsaOaepDecrypt(key)
-	if !worked {
-		return false, "Failed to decrypt key"
-	}
-	kd := strings.Split(k, " ")
-	// 0 is ip
-	// 1 is time
-	// 2 and 3 are checkpoints
-	if len(kd) != 4 {
-		return false, "bad key"
-	}
-	// checkpoint parsing
-	cp1 := parseCheckpoint(kd[2])
-	cp2 := parseCheckpoint(kd[3])
-	// check if iphash doesn't match
-	if kd[0] != iphash || cp1.ip != iphash || cp2.ip != iphash {
-		return false, "ip not right"
-	}
-	// parse time
-	cp1Time, err := strconv.Atoi(cp1.time)
-	if err != nil {
-		return false, "Failed to parse time"
-	}
-	cp2Time, err := strconv.Atoi(cp2.time)
-	if err != nil {
-		return false, "Failed to parse time"
-	}
-	// if greater than 30 seconds
-	if (cp1Time - cp2Time) > 10000*3 {
-		return false, "Took to long to do checkpoints"
-	}
-	// time parsing
-	t, err := strconv.Atoi(kd[1])
-	if err != nil {
-		return false, "Failed to parse time"
-	}
-	// less than 24 hrs old
-	if time.Unix(int64(t), 0).Add(time.Duration(86400)).Unix() <= time.Unix(time.Now().Unix(), 0).Unix() {
-		return true, ""
-	}
-	// default
-	return false, "Key Expired"
-}
-
-func parseCheckpoint(chp string) Visited {
-	s := strings.Split(chp, ":")
-	return Visited{
-		point: s[0],
-		time:  s[1],
-		ip:    s[2],
+		log.Panicln(err)
 	}
 }
 
+// <editor-fold desc="hash">
 func hashIP(ip string) string {
 	h := sha256.New()
 	h.Write([]byte(ip))
@@ -327,35 +210,117 @@ func hashIP(ip string) string {
 	return hash
 }
 
-func RsaOaepEncrypt(secret string) (string, bool) {
-	label := []byte("OAEP Encryption")
-	rng := rand.Reader
-	ciphertext, err := rsa.EncryptOAEP(sha256.New(), rng, &publicKey, []byte(secret), label)
+// </editor-fold>
+// <editor-fold desc="Encryption/Decrpytion">
+func encrypt(data string) (*string, error) {
+	enc, err := hybrid.NewHybridEncrypt(ksPub)
 	if err != nil {
-		return "", false
+		return nil, err
 	}
-	return base64.StdEncoding.EncodeToString(ciphertext), true
+	ct, err := enc.Encrypt([]byte(data), encLabel)
+	if err != nil {
+		return nil, err
+	}
+	rt := base64.StdEncoding.EncodeToString(ct)
+	return &rt, nil
+}
+func decrypt(data string) (*string, error) {
+	dec, err := hybrid.NewHybridDecrypt(ks)
+	if err != nil {
+		return nil, err
+	}
+	ct, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		return nil, err
+	}
+	rt, err := dec.Decrypt(ct, encLabel)
+	if err != nil {
+		return nil, err
+	}
+	r := string(rt)
+	return &r, nil
 }
 
-func RsaOaepDecrypt(secret string) (string, bool) {
-	label := []byte("OAEP Encryption")
-	ciphertext, err := base64.StdEncoding.DecodeString(secret)
-	if err != nil {
-		return "", false
+// </editor-fold>
+// <editor-fold desc="Checkpoint Methods">
+func generateCheckpoint(ip string, curCheckpoint string) (*string, error) {
+	cp := checkpoint{
+		Time:       fmt.Sprint(time.Now().Unix()),
+		Checkpoint: curCheckpoint,
+		IP:         ip,
 	}
-	plaintext, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, privateKey, ciphertext, label)
+	j, err := json.Marshal(cp)
 	if err != nil {
-		return "", false
+		return nil, err
 	}
-	return string(plaintext), true
+	rt, err := encrypt(string(j))
+	if err != nil {
+		return nil, err
+	}
+	return rt, nil
+}
+func decodeCheckpoint(data string) (*checkpoint, error) {
+	cp := checkpoint{}
+	dec, err := decrypt(data)
+	if err != nil {
+		return nil, err
+	}
+	err = json.Unmarshal([]byte(*dec), &cp)
+	if err != nil {
+		return nil, err
+	}
+	return &cp, nil
 }
 
-func remove(s []string, hash string) []string {
-	for i, v := range s {
-		if v == hash {
-			s = append(s[:i], s[i+1:]...)
-			break
-		}
+// </editor-fold>
+// <editor-fold desc="Key Methods">
+func genKey(c1 checkpoint, c2 checkpoint, ip string, staff bool) (*string, error) {
+	cp1, err := json.Marshal(c1)
+	if err != nil {
+		return nil, err
 	}
-	return s
+	cp2, err := json.Marshal(c2)
+	if err != nil {
+		return nil, err
+	}
+	encstring := fmt.Sprintf("%s %s %s %s %s", cp1, cp2, ip, fmt.Sprint(time.Now().Unix()), strconv.FormatBool(staff))
+	enc, err := encrypt(encstring)
+	if err != nil {
+		return nil, err
+	}
+	return enc, nil
 }
+func checkKey(key string, ip string) bool {
+	dec, err := decrypt(key)
+	if err != nil {
+		return false
+	}
+	t := strings.Split(*dec, " ")
+	if len(t) != 5 {
+		return false
+	}
+	if t[4] == "true" {
+		return true
+	}
+	var cp1, cp2 checkpoint
+	err = json.Unmarshal([]byte(t[0]), &cp1)
+	if err != nil {
+		return false
+	}
+	err = json.Unmarshal([]byte(t[1]), &cp2)
+	if err != nil {
+		return false
+	}
+	//hashed := t[2]
+	ct, err := strconv.Atoi(t[3])
+	if err != nil {
+		return false
+	}
+	/*if cp1.IP != ip || cp2.IP != ip || hashed != ip {
+		return false
+	}*/
+	cookieTime := time.Unix(int64(ct), 0)
+	return cookieTime.Unix() < time.Now().Add(time.Hour*24).Unix()
+}
+
+// </editor-fold
