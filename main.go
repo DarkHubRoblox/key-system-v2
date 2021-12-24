@@ -23,7 +23,8 @@ const (
 	checkpoint1URL        = "https://linkvertise.com/224166/darkhub-key"
 	checkpoint2URL        = "https://linkvertise.com/224166/darkhub-checkpoint"
 	finishCookieName      = "usedfhytgrbuoeyrbftvuyoisrbnfovuysrbotguynsbrfuoivbhdfruyignbdouirthgbuifsdhngbkudryhngkbudfhgihujadamlogshwid"
-	version               = "2.0.0"
+	DONATORCOOKIENAME     = "Em3xfB5sURWGwayuN0CUtHYDNR8Lrh"
+	version               = "2.0.1"
 	staffCookieName       = "eXE6QrxMIrzT5ribgfvV1231qwesa"
 )
 
@@ -81,6 +82,12 @@ func main() {
 				return c.Redirect("/getKey")
 			}
 			c.ClearCookie(finishCookieName)
+		}
+		if cookie := c.Cookies(DONATORCOOKIENAME); len(cookie) > 0 {
+			if checkKey(cookie, hashIP(c.IP())) {
+				return c.Redirect("/getKey")
+			}
+			c.ClearCookie(DONATORCOOKIENAME)
 		}
 		return c.Redirect(checkpoint1URL)
 	})
@@ -144,6 +151,12 @@ func main() {
 				return c.SendString(cook)
 			}
 			c.ClearCookie(finishCookieName)
+		}
+		if cook := c.Cookies(DONATORCOOKIENAME); len(cook) > 0 {
+			if checkKey(cook, hash) {
+				return c.SendString(cook)
+			}
+			c.ClearCookie(DONATORCOOKIENAME)
 		}
 		checkpoint1 := c.Cookies(checkpoint1CookieName)
 		checkpoint2 := c.Cookies(checkpoint1CookieName)
@@ -213,6 +226,12 @@ func main() {
 			return c.Status(500).SendString("Failed to generate key Key")
 		}
 		activeKeyStubs = remove(activeKeyStubs, keyS)
+		cookie := fiber.Cookie{
+			Name:    DONATORCOOKIENAME,
+			Value:   *key,
+			Expires: time.Now().Add(time.Hour * 10 * 200),
+		}
+		c.Cookie(&cookie)
 		return c.SendString(*key)
 	})
 	// </editor-fold>
@@ -228,7 +247,7 @@ func main() {
 		return c.SendString("OK")
 	})
 	// </editor-fold>
-	err = app.Listen(":5001")
+	err = app.Listen(":5000")
 	if err != nil {
 		log.Panicln(err)
 	}
@@ -348,7 +367,6 @@ func checkKey(key string, ip string) bool {
 	if err != nil {
 		return false
 	}
-
 	if cp1.IP != ip || cp2.IP != ip || hashed != ip {
 		return false
 	}
